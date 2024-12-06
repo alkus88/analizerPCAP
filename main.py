@@ -15,21 +15,19 @@ def ip_in_subnet(ip, subnets):
             if ip_obj in ip_network(subnet):
                 return True
     except ValueError:
-        # Błędny adres IP, ignorujemy
         print(f"Błędny adres IP: {ip}")
     return False
 
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
-def classify_intention(ip_src, ip_dst, protocol, netflix_subnets):
-    if ip_in_subnet(ip_src, netflix_subnets) or ip_in_subnet(ip_dst, netflix_subnets):
-        if protocol == "UDP":
-            return "Streaming wideo -> Wysoka przepustowość burst"
-        elif protocol == "TCP":
-            return "Streaming wideo -> Stabilne połączenie"
+def classify_intention(ip_src, ip_dst, protocol, streaming_services):
+    if protocol == "UDP" or protocol == "TCP":
+        for service, data in streaming_services.items():
+            if ip_in_subnet(ip_src, data["subnets"]) or ip_in_subnet(ip_dst, data["subnets"]):
+                return data["intention"]
     return "Inna intencja"
 
 # Analiza pliku PCAP i generowanie wyników
-def analyze_pcap(file_path, netflix_subnets, output_csv, max_entries=100000):
+def analyze_pcap(file_path, streaming_services, output_csv, max_entries=100000):
     cap = pyshark.FileCapture(file_path)
     results = []
     packet_count = 0
@@ -46,7 +44,7 @@ def analyze_pcap(file_path, netflix_subnets, output_csv, max_entries=100000):
             protocol = pkt.transport_layer
 
             # Klasyfikacja intencji
-            intention = classify_intention(ip_src, ip_dst, protocol, netflix_subnets)
+            intention = classify_intention(ip_src, ip_dst, protocol, streaming_services)
 
             # Dodajemy dane do wyników
             results.append({
@@ -62,11 +60,9 @@ def analyze_pcap(file_path, netflix_subnets, output_csv, max_entries=100000):
                 break
 
         except AttributeError:
-            # Pakiety bez warstwy IP lub transportowej
             print(f"Ignorowany pakiet: brak warstwy IP/transportowej (pakiet {packet_count})")
             continue
         except ValueError as e:
-            # Obsługa błędnych danych
             print(f"Błąd podczas przetwarzania pakietu {packet_count}: {e}")
             continue
 
@@ -81,13 +77,22 @@ def analyze_pcap(file_path, netflix_subnets, output_csv, max_entries=100000):
 
     print(f"Wyniki zapisano w pliku: {output_csv}")
 
-# Ścieżka do pliku PCAP i pliku z zakresami IP
+# Ścieżki do plików
 pcap_file = "C:/Users/Gryngiel/Documents/Studia 2st/Profilowanie użytkowników/Program do analizy/AnalizaPCAP/DANE/traffic_2024-12-02_15%3A03%3A19.pcap"
-ip_ranges_file = "netflix_ips.txt"
+netflix_file = "netflix_ips.txt"
+disney_file = "disney_ips.txt"
+hbo_file = "hbo_ips.txt"
+prime_file = "prime_ips.txt"
+youtube_file = "youtube_ips.txt"
 output_csv = "analyzed_traffic.csv"
 
 # Wczytanie zakresów IP
-netflix_subnets = load_ip_ranges(ip_ranges_file)
+streaming_services = {
+    "Netflix": {"subnets": load_ip_ranges(netflix_file), "intention": "Streaming wideo NetFlix -> Wysoka przepustowość burst"},
+    "Disney+": {"subnets": load_ip_ranges(disney_file), "intention": "Streaming wideo Disney+ -> Wysoka przepustowość burst"},
+    "HBO MAX": {"subnets": load_ip_ranges(hbo_file), "intention": "Streaming wideo HBO MAX -> Wysoka przepustowość burst"},
+    "Prime Video": {"subnets": load_ip_ranges(prime_file), "intention": "Streaming wideo Prime Video -> Wysoka przepustowość burst"},
+}
 
-# Uruchomienie analizy z limitem 100 000 wpisów
-analyze_pcap(pcap_file, netflix_subnets, output_csv, max_entries=100000)
+# Uruchomienie analizy
+analyze_pcap(pcap_file, streaming_services, output_csv, max_entries=100000)
