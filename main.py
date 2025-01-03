@@ -50,20 +50,33 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp):
 
 # Funkcja do klasyfikacji gier online na podstawie portów
 def classify_game_intention(src_port, dst_port, game_ports):
-    for game, ports in game_ports.items():
-        for port in ports:
-            # Obsługa zakresów portów (tuple: (min_port, max_port))
-            if isinstance(port, tuple):
-                if port[0] <= src_port <= port[1] or port[0] <= dst_port <= port[1]:
-                    return f"Gra online -> {game} -> Wysoka responsywność"
-            # Obsługa pojedynczych portów
-            elif src_port == port or dst_port == port:
-                return f"Gra online -> {game} -> Wysoka responsywność"
+    try:
+        for game, ports in game_ports.items():
+            for port in ports:
+                # Sprawdź, czy port to zakres
+                if isinstance(port, tuple) and len(port) == 2:
+                    if port[0] <= src_port <= port[1] and port[0] <= dst_port <= port[1]:
+                        # print(f"Rozpoznano grę: {game} dla portów: src_port={src_port}, dst_port={dst_port}")
+                        return f"Gra online -> {game} -> Wysoka responsywność"
+                # Sprawdź, czy port to pojedyncza wartość
+                elif isinstance(port, int):
+                    if src_port == port or dst_port == port:
+                        # print(f"Rozpoznano grę: {game} dla portów: src_port={src_port}, dst_port={dst_port}")
+                        return f"Gra online -> {game} -> Wysoka responsywność"
+        # print(f"Nie rozpoznano gry: src_port={src_port}, dst_port={dst_port}")
+        return None
+    except Exception as e:
+        print(f"Błąd w klasyfikacji gry: {e}")
         return None
 
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
 def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port):
-    # Najpierw rozpoznaj serwis
+    # Rozpoznaj gry online najpierw
+    game_intention = classify_game_intention(src_port, dst_port, game_ports)
+    if game_intention:
+        return game_intention
+
+    # Następnie rozpoznaj serwisy streamingowe
     chosen_service = None
     for service, data in streaming_services.items():
         if ip_in_subnet(ip_src, data["subnets"]) or ip_in_subnet(ip_dst, data["subnets"]):
@@ -84,11 +97,6 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
     else:
         # Jeszcze nie wiemy, albo nie do końca pewne
         return f"{chosen_service} -> (określanie typu...) -> Wysoka przepustowość"
-
-    # Rozpoznaj gry online
-    game_intention = classify_game_intention(src_port, dst_port, game_ports)
-    if game_intention:
-        return game_intention
 
 # Analiza pliku PCAP i generowanie wyników
 def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entries=100000):
@@ -178,5 +186,7 @@ game_ports = {
     "Roblox": [(49152, 65535)],
 }
 
+# classify_game_intention(4000, 53360, game_ports)
+
 # Uruchomienie analizy
-analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=100000)
+analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=10000)
