@@ -48,8 +48,21 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp):
         # Za mało danych do klasyfikacji
         return None
 
+# Funkcja do klasyfikacji gier online na podstawie portów
+def classify_game_intention(src_port, dst_port, game_ports):
+    for game, ports in game_ports.items():
+        for port in ports:
+            # Obsługa zakresów portów (tuple: (min_port, max_port))
+            if isinstance(port, tuple):
+                if port[0] <= src_port <= port[1] or port[0] <= dst_port <= port[1]:
+                    return f"Gra online -> {game} -> Wysoka responsywność"
+            # Obsługa pojedynczych portów
+            elif src_port == port or dst_port == port:
+                return f"Gra online -> {game} -> Wysoka responsywność"
+        return None
+
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
-def classify_intention(ip_src, ip_dst, protocol, streaming_services, timestamp):
+def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port):
     # Najpierw rozpoznaj serwis
     chosen_service = None
     for service, data in streaming_services.items():
@@ -72,8 +85,13 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, timestamp):
         # Jeszcze nie wiemy, albo nie do końca pewne
         return f"{chosen_service} -> (określanie typu...) -> Wysoka przepustowość"
 
+    # Rozpoznaj gry online
+    game_intention = classify_game_intention(src_port, dst_port, game_ports)
+    if game_intention:
+        return game_intention
+
 # Analiza pliku PCAP i generowanie wyników
-def analyze_pcap(file_path, streaming_services, output_csv, max_entries=100000):
+def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entries=100000):
     cap = pyshark.FileCapture(file_path)
     results = []
     packet_count = 0
@@ -90,14 +108,21 @@ def analyze_pcap(file_path, streaming_services, output_csv, max_entries=100000):
             protocol = pkt.transport_layer
             timestamp = pkt.sniff_time
 
-            # Klasyfikacja intencji
-            intention = classify_intention(ip_src, ip_dst, protocol, streaming_services, timestamp)
+            # Pobranie portów źródłowego i docelowego
+            src_port = int(pkt[protocol].srcport) if hasattr(pkt[protocol], "srcport") else None
+            dst_port = int(pkt[protocol].dstport) if hasattr(pkt[protocol], "dstport") else None
 
+            # Klasyfikacja intencji
+            intention = classify_intention(
+                ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port
+            )
             # Dodajemy dane do wyników
             results.append({
                 "Source IP": ip_src,
                 "Destination IP": ip_dst,
                 "Protocol": protocol,
+                "Source Port": src_port,
+                "Destination Port": dst_port,
                 "Timestamp": timestamp,
                 "Intention": intention,
             })
@@ -118,7 +143,7 @@ def analyze_pcap(file_path, streaming_services, output_csv, max_entries=100000):
 
     # Zapis wyników do pliku CSV
     with open(output_csv, mode='w', newline='') as csvfile:
-        fieldnames = ["Source IP", "Destination IP", "Protocol", "Intention"]
+        fieldnames = ["Source IP", "Destination IP", "Protocol", "Source Port", "Destination Port", "Timestamp", "Intention"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
@@ -143,5 +168,15 @@ streaming_services = {
 #    "YouTube": {"subnets": load_ip_ranges(youtube_file), "intention": "Streaming wideo YouTube -> Wysoka przepustowość burst"},
 }
 
+# Słownik portów dla gier online
+game_ports = {
+    "Fortnite": [5222, 5795, 5800, 6515],
+    "League of Legends": [5000, 8393, 8394, 5223],
+    "Counter-Strike: GO": [27015, 27036],
+    "Apex Legends": [4000, 4010, 4020, 4030],
+    "Valorant": [7000, 7001, 7002, 7003],
+    "Roblox": [(49152, 65535)],
+}
+
 # Uruchomienie analizy
-analyze_pcap(pcap_file, streaming_services, output_csv, max_entries=100000)
+analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=100000)
