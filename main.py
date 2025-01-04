@@ -76,6 +76,19 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
     if game_intention:
         return game_intention
 
+    # Rozpoznaj ruch DNS
+    if protocol == "UDP" and (src_port == 53 or dst_port == 53):
+        return "DNS -> Zapytanie domenowe -> Niska przepustowość, niska latencja"
+
+    # Rozpoznaj ruch VoIP (SIP i RTP)
+    if protocol in ["UDP", "TCP"]:
+        # SIP
+        if src_port in [5060, 6050] or dst_port in [5060, 6050]:
+            return "VoIP -> SIP -> Niska przepustowość, niska latencja"
+        # RTP
+        if (16384 <= src_port <= 32767 and 16384 <= dst_port <= 32767):
+            return "VoIP -> RTP -> Niska przepustowość, niska latencja"
+
     # Następnie rozpoznaj serwisy streamingowe
     chosen_service = None
     for service, data in streaming_services.items():
@@ -186,7 +199,7 @@ game_ports = {
     "Roblox": [(49152, 65535)],
 }
 
-# classify_game_intention(4000, 53360, game_ports)
+# classify_game_intention(5060, 53360, game_ports)
 
 # Uruchomienie analizy
 analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=10000)
