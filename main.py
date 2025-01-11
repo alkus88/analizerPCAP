@@ -28,31 +28,43 @@ flows = {}
 
 
 def analyze_flow(ip_src, ip_dst, protocol, timestamp):
+
+    # Upewnij się, że timestamp jest obiektem datetime
+    if not isinstance(timestamp, datetime):
+        timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
+
+    # Uproszczenie klucza przepływu (bez portów)
     flow_key = (ip_src, ip_dst, protocol)
+
     if flow_key not in flows:
         flows[flow_key] = []
     flows[flow_key].append(timestamp)
 
-    # Klasyfikacja po 20 pakietach
-    if len(flows[flow_key]) >= 20:
+    # Logowanie przepływu
+    print(f"Przepływ: {flow_key}, Liczba pakietów: {len(flows[flow_key])}")
+
+    # Klasyfikacja po 10 pakietach
+    if len(flows[flow_key]) >= 10:
         times = flows[flow_key]
+
         # Obliczamy odstępy czasowe w sekundach
-        deltas = []
-        for i in range(len(times)-1):
-            delta = (times[i+1] - times[i]).total_seconds()
-            deltas.append(delta)
+        deltas = [(times[i+1] - times[i]).total_seconds() for i in range(len(times)-1)]
         avg_delta = sum(deltas) / len(deltas)
 
+        # Logowanie odstępów czasowych
+        print(f"Przepływ: {flow_key}, Średni odstęp: {avg_delta}, Liczba pakietów: {len(times)}")
+
         # Klasyfikacja
-        if avg_delta < 4:
+        if avg_delta < 0.01:
             return "live"
-        elif avg_delta >= 6:
+        elif 0.01 <= avg_delta < 0.1:
             return "vod"
         else:
-            return "unknown"
+            return "inny_typ"
     else:
         # Za mało danych do klasyfikacji
         return None
+
 
 
 def classify_by_packet_length(packet_length):
@@ -116,25 +128,30 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
             chosen_service = service
             break
 
-    if chosen_service is None:
-        return "Inna intencja"
+    if chosen_service:
+        # Jeśli serwis został rozpoznany, wykonaj dodatkową analizę typu streamingu
+        streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp)
+        if streaming_type == "live":
+            return f"{chosen_service} -> Streaming na żywo -> Wysoka przepustowość"
+        elif streaming_type == "vod":
+            return f"{chosen_service} -> VoD -> Wysoka przepustowość"
+        else:
+            return f"{chosen_service} -> Nieokreślony typ streamingu"
 
-    # Analiza flow w celu sprawdzenia typu streamingu
     streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp)
+    if streaming_type:
+        if streaming_type == "live":
+            return "Streaming na żywo -> Wysoka przepustowość"
+        elif streaming_type == "vod":
+            return "VoD -> Wysoka przepustowość"
 
-    # Jeśli już znamy typ streamingu
-    if streaming_type == "live":
-        return f"{chosen_service} -> Streaming na żywo -> Wysoka przepustowość"
-    elif streaming_type == "vod":
-        return f"{chosen_service} -> VoD -> Wysoka przepustowość"
-    else:
-        # Jeszcze nie wiemy, albo nie do końca pewne
-        return f"{chosen_service} -> (określanie typu...) -> Wysoka przepustowość"
+    # Jeśli nic nie pasuje, zwróć "Inna intencja"
+    return "Inna intencja"
 
 # Analiza pliku PCAP i generowanie wyników
 
 
-def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entries=100000):
+def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000):
 
     cap = pyshark.FileCapture(file_path)
     results = []
@@ -189,22 +206,43 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entr
                 break
 
         except AttributeError:
-            print(f"Ignorowany pakiet: brak warstwy IP/transportowej (pakiet {packet_count})")
+            # print(f"Ignorowany pakiet: brak warstwy IP/transportowej (pakiet {packet_count})")
             continue
         except ValueError as e:
-            print(f"Błąd podczas przetwarzania pakietu {packet_count}: {e}")
+            # print(f"Błąd podczas przetwarzania pakietu {packet_count}: {e}")
             continue
 
     cap.close()
 
     # Zapis wyników do pliku CSV
     with open(output_csv, mode='w', newline='') as csvfile:
-        fieldnames = ["Source IP", "Destination IP", "Protocol", "Source Port", "Destination Port", "Packet Length", "Timestamp", "Intention"]
+        fieldnames = ["Source IP",
+                      "Destination IP",
+                      "Protocol",
+                      "Source Port",
+                      "Destination Port",
+                      "Packet Length",
+                      "Timestamp",
+                      "Intention"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
 
     print(f"Wyniki zapisano w pliku: {output_csv}")
+
+    # Zapis przepływów do pliku CSV
+    with open(flows_csv, mode='w', newline='') as csvfile:
+        fieldnames = ["Flow Key", "Packet Count", "Timestamps"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for flow_key, timestamps in flows.items():
+            writer.writerow({
+                "Flow Key": flow_key,
+                "Packet Count": len(timestamps),
+                "Timestamps": [str(ts) for ts in timestamps],
+            })
+
+    print(f"Przepływy zapisano w pliku: {flows_csv}")
 
 # Ścieżki do plików
 pcap_file = "C:/Users/Gryngiel/Documents/Studia 2st/Profilowanie użytkowników/Program do analizy/AnalizaPCAP/DANE/traffic_2024-12-02_15%3A03%3A19.pcap"
@@ -214,6 +252,7 @@ hbo_file = "hbo_ips.txt"
 prime_file = "prime_ips.txt"
 #youtube_file = "youtube_ips.txt"
 output_csv = "analyzed_traffic.csv"
+flows_csv = "flows.csv"
 
 # Wczytanie zakresów IP
 streaming_services = {
@@ -237,4 +276,4 @@ game_ports = {
 # classify_game_intention(62188, 12345, game_ports)
 
 # Uruchomienie analizy
-analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=10000)
+analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000)
