@@ -4,11 +4,15 @@ from ipaddress import ip_address, ip_network
 from datetime import datetime
 
 # Funkcja do wczytywania zakresów IP z pliku
+
+
 def load_ip_ranges(file_path):
     with open(file_path, 'r') as file:
         return [line.strip() for line in file if line.strip()]
 
 # Funkcja sprawdzająca, czy adres IP należy do zakresu
+
+
 def ip_in_subnet(ip, subnets):
     try:
         ip_obj = ip_address(ip)
@@ -19,7 +23,9 @@ def ip_in_subnet(ip, subnets):
         print(f"Błędny adres IP: {ip}")
     return False
 
+
 flows = {}
+
 
 def analyze_flow(ip_src, ip_dst, protocol, timestamp):
     flow_key = (ip_src, ip_dst, protocol)
@@ -48,6 +54,18 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp):
         # Za mało danych do klasyfikacji
         return None
 
+
+def classify_by_packet_length(packet_length):
+    if packet_length is None:
+        return "Nieznana długość pakietu"
+    if packet_length >= 1000:
+        return "Duży pakiet -> Wysoka przepustowość"
+    elif packet_length < 100:
+        return "Mały pakiet -> Niska przepustowość"
+    else:
+        return "Średni pakiet -> Średnia przepustowość"
+
+
 # Funkcja do klasyfikacji gier online na podstawie portów
 def classify_game_intention(src_port, dst_port, game_ports):
     try:
@@ -70,6 +88,8 @@ def classify_game_intention(src_port, dst_port, game_ports):
         return None
 
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
+
+
 def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port):
     # Rozpoznaj gry online najpierw
     game_intention = classify_game_intention(src_port, dst_port, game_ports)
@@ -112,7 +132,10 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
         return f"{chosen_service} -> (określanie typu...) -> Wysoka przepustowość"
 
 # Analiza pliku PCAP i generowanie wyników
+
+
 def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entries=100000):
+
     cap = pyshark.FileCapture(file_path)
     results = []
     packet_count = 0
@@ -133,10 +156,21 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entr
             src_port = int(pkt[protocol].srcport) if hasattr(pkt[protocol], "srcport") else None
             dst_port = int(pkt[protocol].dstport) if hasattr(pkt[protocol], "dstport") else None
 
+            # Pobranie długości pakietu
+            packet_length = int(pkt.length) if hasattr(pkt, "length") else None
+
             # Klasyfikacja intencji
             intention = classify_intention(
                 ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port
             )
+
+            # Klasyfikacja na podstawie długości pakietu
+            packet_size_classification = classify_by_packet_length(packet_length)
+            if intention:
+                intention = f"{intention} ({packet_size_classification})"
+            else:
+                intention = packet_size_classification
+
             # Dodajemy dane do wyników
             results.append({
                 "Source IP": ip_src,
@@ -144,6 +178,7 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entr
                 "Protocol": protocol,
                 "Source Port": src_port,
                 "Destination Port": dst_port,
+                "Packet Length": packet_length,
                 "Timestamp": timestamp,
                 "Intention": intention,
             })
@@ -164,7 +199,7 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, max_entr
 
     # Zapis wyników do pliku CSV
     with open(output_csv, mode='w', newline='') as csvfile:
-        fieldnames = ["Source IP", "Destination IP", "Protocol", "Source Port", "Destination Port", "Timestamp", "Intention"]
+        fieldnames = ["Source IP", "Destination IP", "Protocol", "Source Port", "Destination Port", "Packet Length", "Timestamp", "Intention"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
@@ -199,7 +234,7 @@ game_ports = {
     "Roblox": [(49152, 65535)],
 }
 
-# classify_game_intention(5060, 53360, game_ports)
+# classify_game_intention(62188, 12345, game_ports)
 
 # Uruchomienie analizy
 analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, max_entries=10000)
