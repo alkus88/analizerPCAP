@@ -27,7 +27,7 @@ def ip_in_subnet(ip, subnets):
 flows = {}
 
 
-def analyze_flow(ip_src, ip_dst, protocol, timestamp):
+def analyze_flow(ip_src, ip_dst, protocol, timestamp, packet_size, min_packet_size=700):
 
     # Upewnij się, że timestamp jest obiektem datetime
     if not isinstance(timestamp, datetime):
@@ -37,15 +37,19 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp):
     flow_key = (ip_src, ip_dst, protocol)
 
     if flow_key not in flows:
-        flows[flow_key] = []
-    flows[flow_key].append(timestamp)
+        flows[flow_key] = {"timestamps": [], "packet_sizes": []}
 
-    # Logowanie przepływu
-    print(f"Przepływ: {flow_key}, Liczba pakietów: {len(flows[flow_key])}")
+        # Dodaj tylko pakiety spełniające kryterium wielkości
+    if packet_size >= min_packet_size:
+        flows[flow_key]["timestamps"].append(timestamp)
+        flows[flow_key]["packet_sizes"].append(packet_size)
 
-    # Klasyfikacja po 10 pakietach
-    if len(flows[flow_key]) >= 10:
-        times = flows[flow_key]
+        # Logowanie przepływu
+    print(f"Przepływ: {flow_key}, Liczba pakietów: {len(flows[flow_key]['timestamps'])}")
+
+    # Klasyfikacja po 10 pakietach spełniających kryterium
+    if len(flows[flow_key]["timestamps"]) >= 10:
+        times = flows[flow_key]["timestamps"]
 
         # Obliczamy odstępy czasowe w sekundach
         deltas = [(times[i+1] - times[i]).total_seconds() for i in range(len(times)-1)]
@@ -64,7 +68,6 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp):
     else:
         # Za mało danych do klasyfikacji
         return None
-
 
 
 def classify_by_packet_length(packet_length):
@@ -102,7 +105,15 @@ def classify_game_intention(src_port, dst_port, game_ports):
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
 
 
-def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port):
+def classify_intention(ip_src,
+                       ip_dst,
+                       protocol,
+                       streaming_services,
+                       game_ports,
+                       timestamp,
+                       src_port,
+                       dst_port,
+                       packet_length):
     # Rozpoznaj gry online najpierw
     game_intention = classify_game_intention(src_port, dst_port, game_ports)
     if game_intention:
@@ -118,7 +129,7 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
         if src_port in [5060, 6050] or dst_port in [5060, 6050]:
             return "VoIP -> SIP -> Niska przepustowość, niska latencja"
         # RTP
-        if (16384 <= src_port <= 32767 and 16384 <= dst_port <= 32767):
+        if 16384 <= src_port <= 32767 and 16384 <= dst_port <= 32767:
             return "VoIP -> RTP -> Niska przepustowość, niska latencja"
 
     # Następnie rozpoznaj serwisy streamingowe
@@ -130,7 +141,7 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
 
     if chosen_service:
         # Jeśli serwis został rozpoznany, wykonaj dodatkową analizę typu streamingu
-        streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp)
+        streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp, packet_length)
         if streaming_type == "live":
             return f"{chosen_service} -> Streaming na żywo -> Wysoka przepustowość"
         elif streaming_type == "vod":
@@ -138,7 +149,7 @@ def classify_intention(ip_src, ip_dst, protocol, streaming_services, game_ports,
         else:
             return f"{chosen_service} -> Nieokreślony typ streamingu"
 
-    streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp)
+    streaming_type = analyze_flow(ip_src, ip_dst, protocol, timestamp, packet_length)
     if streaming_type:
         if streaming_type == "live":
             return "Streaming na żywo -> Wysoka przepustowość"
@@ -178,7 +189,7 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
 
             # Klasyfikacja intencji
             intention = classify_intention(
-                ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port
+                ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port, packet_length
             )
 
             # Klasyfikacja na podstawie długości pakietu
@@ -206,10 +217,10 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
                 break
 
         except AttributeError:
-            # print(f"Ignorowany pakiet: brak warstwy IP/transportowej (pakiet {packet_count})")
+            print(f"Ignorowany pakiet: brak warstwy IP/transportowej (pakiet {packet_count})")
             continue
         except ValueError as e:
-            # print(f"Błąd podczas przetwarzania pakietu {packet_count}: {e}")
+            print(f"Błąd podczas przetwarzania pakietu {packet_count}: {e}")
             continue
 
     cap.close()
@@ -232,35 +243,60 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
 
     # Zapis przepływów do pliku CSV
     with open(flows_csv, mode='w', newline='') as csvfile:
-        fieldnames = ["Flow Key", "Packet Count", "Timestamps"]
+        fieldnames = ["Flow Key", "Packet Count", "Timestamps", "Packet Sizes", "Avg Packet Size", "Avg Delta"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        for flow_key, timestamps in flows.items():
+        for flow_key, flow_data in flows.items():
+            timestamps = flow_data["timestamps"]
+            packet_sizes = flow_data["packet_sizes"]
+
+            # Oblicz średni odstęp czasowy (jeśli istnieje więcej niż jeden timestamp)
+            if len(timestamps) > 1:
+                deltas = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(len(timestamps) - 1)]
+                avg_delta = sum(deltas) / len(deltas)
+            else:
+                avg_delta = None
+
+            # Oblicz średni rozmiar pakietu (jeśli istnieją dane o rozmiarach pakietów)
+            avg_packet_size = sum(packet_sizes) / len(packet_sizes) if packet_sizes else None
+
+            # Zapisz dane przepływu do pliku
             writer.writerow({
                 "Flow Key": flow_key,
                 "Packet Count": len(timestamps),
                 "Timestamps": [str(ts) for ts in timestamps],
+                "Packet Sizes": packet_sizes,
+                "Avg Packet Size": avg_packet_size,
+                "Avg Delta": avg_delta,
             })
 
     print(f"Przepływy zapisano w pliku: {flows_csv}")
 
+
 # Ścieżki do plików
-pcap_file = "C:/Users/Gryngiel/Documents/Studia 2st/Profilowanie użytkowników/Program do analizy/AnalizaPCAP/DANE/traffic_2024-12-02_15%3A03%3A19.pcap"
+pcap_file = ("C:/Users/Gryngiel/Documents/Studia 2st/"
+             "Profilowanie użytkowników/Program do analizy/"
+             "AnalizaPCAP/DANE/traffic_2024-12-02_15%3A03%3A19.pcap")
 netflix_file = "netflix_ips.txt"
 disney_file = "disney_ips.txt"
 hbo_file = "hbo_ips.txt"
 prime_file = "prime_ips.txt"
-#youtube_file = "youtube_ips.txt"
+# youtube_file = "youtube_ips.txt"
 output_csv = "analyzed_traffic.csv"
 flows_csv = "flows.csv"
 
 # Wczytanie zakresów IP
 streaming_services = {
-    "Netflix": {"subnets": load_ip_ranges(netflix_file), "intention": "Streaming wideo NetFlix -> Wysoka przepustowość burst"},
-    "Disney+": {"subnets": load_ip_ranges(disney_file), "intention": "Streaming wideo Disney+ -> Wysoka przepustowość burst"},
-    "HBO MAX": {"subnets": load_ip_ranges(hbo_file), "intention": "Streaming wideo HBO MAX -> Wysoka przepustowość burst"},
-    "Prime Video": {"subnets": load_ip_ranges(prime_file), "intention": "Streaming wideo Prime Video -> Wysoka przepustowość burst"},
-#    "YouTube": {"subnets": load_ip_ranges(youtube_file), "intention": "Streaming wideo YouTube -> Wysoka przepustowość burst"},
+    "Netflix": {"subnets": load_ip_ranges(netflix_file),
+                "intention": "Streaming wideo NetFlix -> Wysoka przepustowość burst"},
+    "Disney+": {"subnets": load_ip_ranges(disney_file),
+                "intention": "Streaming wideo Disney+ -> Wysoka przepustowość burst"},
+    "HBO MAX": {"subnets": load_ip_ranges(hbo_file),
+                "intention": "Streaming wideo HBO MAX -> Wysoka przepustowość burst"},
+    "Prime Video": {"subnets": load_ip_ranges(prime_file),
+                    "intention": "Streaming wideo Prime Video -> Wysoka przepustowość burst"},
+    # "YouTube": {"subnets": load_ip_ranges(youtube_file),
+    #    "intention": "Streaming wideo YouTube -> Wysoka przepustowość burst"},
 }
 
 # Słownik portów dla gier online
