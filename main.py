@@ -22,6 +22,19 @@ def save_domain_cache():
         json.dump(domain_cache, f)
 
 
+# Załaduj słowa kluczowe dla klasyfikacji domenowej
+def load_domain_keywords(file_path="domain_keywords.json"):
+    try:
+        with open(file_path, "r") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("Nie udało się załadować pliku ze słowami kluczowymi domen.")
+        return {}
+
+
+domain_keywords = load_domain_keywords()
+
+
 # Funkcja do Reverse DNS
 def resolve_domain(ip_address, exclude_subnets):
     if ip_in_subnet(ip_address, exclude_subnets):
@@ -136,11 +149,11 @@ def classify_game_intention(src_port, dst_port, game_ports):
         return None
 
 
-# Funkcja klasyfikująca intencję na podstawie domeny
+# Klasyfikacja na podstawie domeny
 def classify_intention_by_domain(domain):
-    domain = domain.lower()
-    if any(keyword in domain for keyword in ["fb", "fbcdn", "facebook"]):
-        return "Content Facebook -> Średnia przepustowość"
+    for intention, keywords in domain_keywords.items():
+        if any(keyword in domain for keyword in keywords):
+            return intention
     return None
 
 
@@ -157,7 +170,7 @@ def classify_intention(ip_src,
                        source_domain,
                        destination_domain):
     # Rozpoznaj na podstawie domen
-    domain_intention = classify_intention_by_domain(source_domain) or classify_intention_by_domain(destination_domain)
+    domain_intention = classify_intention_by_domain(source_domain)
     if domain_intention:
         return domain_intention
 
@@ -370,4 +383,4 @@ game_ports = {
 }
 
 # Uruchomienie analizy
-analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, flows_csv, max_entries=1000)
+analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000)

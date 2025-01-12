@@ -1,0 +1,9 @@
+{
+    "Content Facebook": ["fb", "fbcdn", "facebook", "instagram"],
+    "Content Google": ["google", "youtube", "ytimg"],
+    "Content Amazon": ["aws", "amazon"],
+    "Content Netflix": ["netflix", "nflximg"],
+    "Content Microsoft": ["msn", "microsoft", "office"]
+	"Content Ipla": ["ipla", "plus"]
+	"Content Video": ["video", "tv"]
+}
