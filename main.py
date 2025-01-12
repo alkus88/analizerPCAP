@@ -2,17 +2,49 @@ import pyshark
 import csv
 from ipaddress import ip_address, ip_network
 from datetime import datetime
+import socket
+import json
+
+# Cache domenowy
+cache_file = "domain_cache.json"
+domain_cache = {}
+
+# Wczytaj cache domen z pliku
+try:
+    with open(cache_file, 'r') as f:
+        domain_cache = json.load(f)
+except FileNotFoundError:
+    domain_cache = {}
+
+# Funkcja do zapisywania cache domen do pliku
+def save_domain_cache():
+    with open(cache_file, 'w') as f:
+        json.dump(domain_cache, f)
+
+
+# Funkcja do Reverse DNS
+def resolve_domain(ip_address, exclude_subnets):
+    if ip_in_subnet(ip_address, exclude_subnets):
+        return ip_address  # Pomijamy rozwiązywanie domen dla adresów lokalnych
+
+    if ip_address in domain_cache:
+        return domain_cache[ip_address]
+    try:
+        domain = socket.gethostbyaddr(ip_address)[0]
+        print(f"Adres IP {ip_address} -> Domena: {domain}")
+    except socket.herror:
+        domain = ip_address  # Użyj IP, jeśli domena jest niedostępna
+        print(f"Adres IP {ip_address} -> Brak domeny")
+    domain_cache[ip_address] = domain
+    return domain
+
 
 # Funkcja do wczytywania zakresów IP z pliku
-
-
 def load_ip_ranges(file_path):
     with open(file_path, 'r') as file:
         return [line.strip() for line in file if line.strip()]
 
 # Funkcja sprawdzająca, czy adres IP należy do zakresu
-
-
 def ip_in_subnet(ip, subnets):
     try:
         ip_obj = ip_address(ip)
@@ -27,6 +59,7 @@ def ip_in_subnet(ip, subnets):
 flows = {}
 
 
+# Funkcja do analizy przepływów
 def analyze_flow(ip_src, ip_dst, protocol, timestamp, packet_size, min_packet_size=700):
 
     # Upewnij się, że timestamp jest obiektem datetime
@@ -39,12 +72,12 @@ def analyze_flow(ip_src, ip_dst, protocol, timestamp, packet_size, min_packet_si
     if flow_key not in flows:
         flows[flow_key] = {"timestamps": [], "packet_sizes": []}
 
-        # Dodaj tylko pakiety spełniające kryterium wielkości
+    # Dodaj tylko pakiety spełniające kryterium wielkości
     if packet_size >= min_packet_size:
         flows[flow_key]["timestamps"].append(timestamp)
         flows[flow_key]["packet_sizes"].append(packet_size)
 
-        # Logowanie przepływu
+    # Logowanie przepływu
     print(f"Przepływ: {flow_key}, Liczba pakietów: {len(flows[flow_key]['timestamps'])}")
 
     # Klasyfikacja po 10 pakietach spełniających kryterium
@@ -102,9 +135,16 @@ def classify_game_intention(src_port, dst_port, game_ports):
         print(f"Błąd w klasyfikacji gry: {e}")
         return None
 
+
+# Funkcja klasyfikująca intencję na podstawie domeny
+def classify_intention_by_domain(domain):
+    domain = domain.lower()
+    if any(keyword in domain for keyword in ["fb", "fbcdn", "facebook"]):
+        return "Content Facebook -> Średnia przepustowość"
+    return None
+
+
 # Funkcja klasyfikująca intencję na podstawie adresu IP i protokołu
-
-
 def classify_intention(ip_src,
                        ip_dst,
                        protocol,
@@ -113,8 +153,15 @@ def classify_intention(ip_src,
                        timestamp,
                        src_port,
                        dst_port,
-                       packet_length):
-    # Rozpoznaj gry online najpierw
+                       packet_length,
+                       source_domain,
+                       destination_domain):
+    # Rozpoznaj na podstawie domen
+    domain_intention = classify_intention_by_domain(source_domain) or classify_intention_by_domain(destination_domain)
+    if domain_intention:
+        return domain_intention
+
+    # Rozpoznaj gry online
     game_intention = classify_game_intention(src_port, dst_port, game_ports)
     if game_intention:
         return game_intention
@@ -159,14 +206,16 @@ def classify_intention(ip_src,
     # Jeśli nic nie pasuje, zwróć "Inna intencja"
     return "Inna intencja"
 
+
 # Analiza pliku PCAP i generowanie wyników
-
-
 def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000):
 
     cap = pyshark.FileCapture(file_path)
     results = []
     packet_count = 0
+
+    # Zakresy do pominięcia rozwiązywania domen
+    local_and_client_subnets = ["85.202.60.0/22", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]
 
     for pkt in cap:
         try:
@@ -187,9 +236,15 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
             # Pobranie długości pakietu
             packet_length = int(pkt.length) if hasattr(pkt, "length") else None
 
+            # Rozwiązywanie domen
+            source_domain = resolve_domain(ip_src, local_and_client_subnets)
+            destination_domain = resolve_domain(ip_dst, local_and_client_subnets)
+
             # Klasyfikacja intencji
             intention = classify_intention(
-                ip_src, ip_dst, protocol, streaming_services, game_ports, timestamp, src_port, dst_port, packet_length
+                ip_src, ip_dst, protocol, streaming_services,
+                game_ports, timestamp, src_port, dst_port, packet_length,
+                source_domain, destination_domain
             )
 
             # Klasyfikacja na podstawie długości pakietu
@@ -202,7 +257,9 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
             # Dodajemy dane do wyników
             results.append({
                 "Source IP": ip_src,
+                "Source Domain": source_domain,
                 "Destination IP": ip_dst,
+                "Destination Domain": destination_domain,
                 "Protocol": protocol,
                 "Source Port": src_port,
                 "Destination Port": dst_port,
@@ -228,7 +285,9 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
     # Zapis wyników do pliku CSV
     with open(output_csv, mode='w', newline='') as csvfile:
         fieldnames = ["Source IP",
+                      "Source Domain",
                       "Destination IP",
+                      "Destination Domain",
                       "Protocol",
                       "Source Port",
                       "Destination Port",
@@ -271,6 +330,7 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
             })
 
     print(f"Przepływy zapisano w pliku: {flows_csv}")
+    save_domain_cache()
 
 
 # Ścieżki do plików
@@ -309,7 +369,5 @@ game_ports = {
     "Roblox": [(49152, 65535)],
 }
 
-# classify_game_intention(62188, 12345, game_ports)
-
 # Uruchomienie analizy
-analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000)
+analyze_pcap(pcap_file, streaming_services, game_ports, output_csv, flows_csv, max_entries=1000)
