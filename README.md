@@ -77,6 +77,9 @@ analizerPCAP/
 ├── requirements.txt           # Lista wymaganych bibliotek
 ├── domain_keywords.json       # Słowa kluczowe do klasyfikacji domen
 ├── netflix_ips.txt            # Zakresy IP dla Netflix
+├── prime_ips.txt              # Zakresy IP dla Prime
+├── hbo_ips.txt                # Zakresy IP dla HBO GO
+├── disney_ips.txt             # Zakresy IP dla Disney+
 ├── analyzed_traffic.csv       # Wyniki analizy
 └── flows.csv                  # Statystyki przepływów
 ```
