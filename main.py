@@ -5,6 +5,15 @@ from datetime import datetime
 import socket
 import json
 
+global_statistics = {
+        "total_packets": 0,
+        "tcp_packets": 0,
+        "udp_packets": 0,
+        "dns_packets": 0,
+        "https_packets": 0,
+        "other_packets": 0
+    }
+
 # Cache domenowy
 cache_file = "domain_cache.json"
 domain_cache = {}
@@ -220,6 +229,37 @@ def classify_intention(ip_src,
     return "Inna intencja"
 
 
+def save_global_statistics_to_csv(file_path):
+    total = global_statistics["total_packets"]
+    if total > 0:
+        # Oblicz procenty
+        statistics_percentages = {
+            "TCP (%)": (global_statistics["tcp_packets"] / total) * 100,
+            "UDP (%)": (global_statistics["udp_packets"] / total) * 100,
+            "DNS (%)": (global_statistics["dns_packets"] / total) * 100,
+            "HTTPS (%)": (global_statistics["https_packets"] / total) * 100,
+            "Other (%)": (global_statistics["other_packets"] / total) * 100
+        }
+    else:
+        statistics_percentages = {
+            "TCP (%)": 0,
+            "UDP (%)": 0,
+            "DNS (%)": 0,
+            "HTTPS (%)": 0,
+            "Other (%)": 0
+        }
+
+    # Zapis do pliku CSV
+    with open(file_path, mode='w', newline='') as csvfile:
+        fieldnames = ["Metric", "Value"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for key, value in statistics_percentages.items():
+            writer.writerow({"Metric": key, "Value": f"{value:.2f}"})
+    print(f"Statystyki zapisano w pliku: {file_path}")
+
+
+
 # Analiza pliku PCAP i generowanie wyników
 def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_csv, max_entries=100000):
 
@@ -267,6 +307,20 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
             else:
                 intention = packet_size_classification
 
+            # Aktualizacja statystyk globalnych
+            global_statistics["total_packets"] += 1
+            if protocol == "TCP":
+                global_statistics["tcp_packets"] += 1
+            elif protocol == "UDP":
+                global_statistics["udp_packets"] += 1
+
+            if protocol == "UDP" and (src_port == 53 or dst_port == 53):
+                global_statistics["dns_packets"] += 1
+            elif protocol == "TCP" and (src_port == 443 or dst_port == 443):
+                global_statistics["https_packets"] += 1
+            else:
+                global_statistics["other_packets"] += 1
+
             # Dodajemy dane do wyników
             results.append({
                 "Source IP": ip_src,
@@ -294,6 +348,9 @@ def analyze_pcap(file_path, streaming_services, game_ports, output_csv, flows_cs
             continue
 
     cap.close()
+
+    # Analiza przepływów i zapis statystyk do pliku
+    save_global_statistics_to_csv("statistics_summary.csv")
 
     # Zapis wyników do pliku CSV
     with open(output_csv, mode='w', newline='') as csvfile:
